@@ -1,9 +1,9 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
 const ChatSessionSchema = new mongoose.Schema({
   tenantId: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Tenant',
+    ref: 'Tenant', 
     required: true 
   },
   contactId: { 
@@ -16,7 +16,7 @@ const ChatSessionSchema = new mongoose.Schema({
   },
   lastMessage: String,
   lastMessageType: String,
-  lastDirection: String, // inbound/outbound
+  lastDirection: String,
   lastStatus: String,
   unreadCount: { 
     type: Number, 
@@ -44,6 +44,56 @@ const ChatSessionSchema = new mongoose.Schema({
     type: Boolean, 
     default: false 
   },
+  priority: { 
+    type: String, 
+    enum: ['low', 'medium', 'high', 'urgent'], 
+    default: 'medium' 
+  },
+  assignedTo: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User' 
+  },
+  labels: [String],
+  source: { 
+    type: String, 
+    enum: ['campaign', 'manual', 'inbound', 'api', 'import'], 
+    default: 'inbound' 
+  },
+  lastCampaignId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Campaign' 
+  },
+  lastTemplateName: String,
+  sentiment: { 
+    type: String, 
+    enum: ['positive', 'neutral', 'negative', 'unknown'], 
+    default: 'unknown' 
+  },
+  autoReplySent: { 
+    type: Boolean, 
+    default: false 
+  },
+  followUpNeeded: { 
+    type: Boolean, 
+    default: false 
+  },
+  followUpDate: Date,
+  csatScore: { type: Number, min: 1, max: 5 },
+  csatComment: String,
+  optedOut: { type: Boolean, default: false },
+  optOutReason: String,
+  optOutAt: Date,
+  isSpam: { type: Boolean, default: false },
+  spamScore: { type: Number, default: 0 },
+  spamReportedAt: Date,
+  avgResponseTime: Number,
+  lastResponseTime: Number,
+  summary: String,
+  customFields: {
+    type: Map,
+    of: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
   createdAt: { 
     type: Date, 
     default: Date.now 
@@ -56,14 +106,20 @@ const ChatSessionSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for fast querying
+// Indexes
 ChatSessionSchema.index({ tenantId: 1, phone: 1 }, { unique: true });
 ChatSessionSchema.index({ tenantId: 1, updatedAt: -1 });
 ChatSessionSchema.index({ tenantId: 1, lastInteraction: -1 });
 ChatSessionSchema.index({ tenantId: 1, unreadCount: -1 });
 ChatSessionSchema.index({ tenantId: 1, hasReplied: 1 });
+ChatSessionSchema.index({ tenantId: 1, isArchived: 1 });
+ChatSessionSchema.index({ tenantId: 1, assignedTo: 1 });
+ChatSessionSchema.index({ tenantId: 1, priority: 1 });
+ChatSessionSchema.index({ tenantId: 1, labels: 1 });
+ChatSessionSchema.index({ tenantId: 1, optedOut: 1 });
+ChatSessionSchema.index({ tenantId: 1, isSpam: 1 });
 
-// Pre-save middleware to update updatedAt
+// Pre-save middleware
 ChatSessionSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();

@@ -194,7 +194,7 @@ app.use("/api/analytics", require("./routes/analytics"));
 app.use("/api/sections", require("./routes/sections"));
 app.use("/api/whatsapp", require("./routes/whatsappRoutes"));
 app.use("/api/debug", require("./routes/debug"));
-
+app.use("/api/chat", require("./routes/chat"));
 // =======================
 // HEALTH & MONITORING
 // =======================

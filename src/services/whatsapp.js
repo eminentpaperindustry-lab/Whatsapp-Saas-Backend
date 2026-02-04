@@ -641,10 +641,288 @@ async function checkWhatsAppHealth() {
   }
 }
 
+// Add these functions to your existing whatsapp.js
+
 // =======================
-// EXPORTS
+// CHAT SPECIFIC FUNCTIONS
+// =======================
+
+/**
+ * Send chat message with all media support
+ */
+async function sendChatMessage({ to, body, type = 'text', mediaUrl = null, caption = '', filename = null }) {
+  try {
+    let payload;
+    const cleanedTo = to.replace('+', '');
+    
+    switch (type.toLowerCase()) {
+      case 'text':
+        if (!body) throw new Error('Message body is required for text');
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanedTo,
+          type: 'text',
+          text: { body }
+        };
+        break;
+        
+      case 'image':
+        if (!mediaUrl) throw new Error('mediaUrl is required for image');
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanedTo,
+          type: 'image',
+          image: {
+            link: mediaUrl,
+            caption: caption || ''
+          }
+        };
+        break;
+        
+      case 'video':
+        if (!mediaUrl) throw new Error('mediaUrl is required for video');
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanedTo,
+          type: 'video',
+          video: {
+            link: mediaUrl,
+            caption: caption || ''
+          }
+        };
+        break;
+        
+      case 'document':
+        if (!mediaUrl) throw new Error('mediaUrl is required for document');
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanedTo,
+          type: 'document',
+          document: {
+            link: mediaUrl,
+            filename: filename || 'document.pdf',
+            caption: caption || ''
+          }
+        };
+        break;
+        
+      case 'audio':
+        if (!mediaUrl) throw new Error('mediaUrl is required for audio');
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanedTo,
+          type: 'audio',
+          audio: {
+            link: mediaUrl
+          }
+        };
+        break;
+        
+      default:
+        throw new Error(`Unsupported message type: ${type}`);
+    }
+    
+    console.log(`📤 Sending ${type} message to ${cleanedTo}`);
+    const response = await sendRaw(payload);
+    return response;
+    
+  } catch (error) {
+    console.error(`❌ Error sending ${type} message:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Send quick reply template
+ */
+async function sendQuickReply({ to, templateName, parameters = [] }) {
+  try {
+    const cleanedTo = to.replace('+', '');
+    
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanedTo,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: {
+          code: 'en_US',
+          policy: 'deterministic'
+        }
+      }
+    };
+    
+    // Add parameters if provided
+    if (parameters && parameters.length > 0) {
+      payload.template.components = [{
+        type: 'BODY',
+        parameters: parameters.map(param => ({
+          type: 'text',
+          text: param
+        }))
+      }];
+    }
+    
+    console.log(`📤 Sending quick reply template ${templateName} to ${cleanedTo}`);
+    const response = await sendRaw(payload);
+    return response;
+    
+  } catch (error) {
+    console.error(`❌ Error sending quick reply:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Send interactive message (buttons/list)
+ */
+async function sendInteractive({ to, type = 'button', body, buttons, header, footer }) {
+  try {
+    const cleanedTo = to.replace('+', '');
+    
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanedTo,
+      type: 'interactive',
+      interactive: {
+        type: type,
+        body: {
+          text: body
+        }
+      }
+    };
+    
+    if (header) {
+      payload.interactive.header = {
+        type: 'text',
+        text: header
+      };
+    }
+    
+    if (footer) {
+      payload.interactive.footer = {
+        text: footer
+      };
+    }
+    
+    if (type === 'button' && buttons) {
+      payload.interactive.action = {
+        buttons: buttons.map((btn, index) => ({
+          type: 'reply',
+          reply: {
+            id: `btn_${index + 1}`,
+            title: btn.title.substring(0, 20) // WhatsApp limit
+          }
+        }))
+      };
+    } else if (type === 'list' && buttons) {
+      payload.interactive.action = {
+        button: 'Options',
+        sections: [
+          {
+            title: 'Choose an option',
+            rows: buttons.map((btn, index) => ({
+              id: `row_${index + 1}`,
+              title: btn.title.substring(0, 24),
+              description: btn.description ? btn.description.substring(0, 72) : ''
+            }))
+          }
+        ]
+      };
+    }
+    
+    console.log(`📤 Sending interactive ${type} message to ${cleanedTo}`);
+    const response = await sendRaw(payload);
+    return response;
+    
+  } catch (error) {
+    console.error(`❌ Error sending interactive message:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Send location message
+ */
+async function sendLocationMessage({ to, latitude, longitude, name = '', address = '' }) {
+  try {
+    const cleanedTo = to.replace('+', '');
+    
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanedTo,
+      type: 'location',
+      location: {
+        latitude: latitude.toString(),
+        longitude: longitude.toString(),
+        name: name.substring(0, 255),
+        address: address.substring(0, 255)
+      }
+    };
+    
+    console.log(`📍 Sending location to ${cleanedTo}`);
+    const response = await sendRaw(payload);
+    return response;
+    
+  } catch (error) {
+    console.error(`❌ Error sending location:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Send contact message
+ */
+async function sendContactMessage({ to, contacts }) {
+  try {
+    const cleanedTo = to.replace('+', '');
+    
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanedTo,
+      type: 'contacts',
+      contacts: contacts.map(contact => ({
+        addresses: contact.addresses || [],
+        birthday: contact.birthday || '',
+        emails: contact.emails || [],
+        name: {
+          formatted_name: contact.name,
+          first_name: contact.firstName || '',
+          last_name: contact.lastName || '',
+          middle_name: contact.middleName || '',
+          suffix: contact.suffix || '',
+          prefix: contact.prefix || ''
+        },
+        org: contact.org || {},
+        phones: contact.phones || [],
+        urls: contact.urls || []
+      }))
+    };
+    
+    console.log(`👤 Sending contact to ${cleanedTo}`);
+    const response = await sendRaw(payload);
+    return response;
+    
+  } catch (error) {
+    console.error(`❌ Error sending contact:`, error.message);
+    throw error;
+  }
+}
+
+// =======================
+// EXPORT ALL FUNCTIONS
 // =======================
 module.exports = {
+  // Existing functions from your file
   sendTemplate,
   sendText,
   sendImage,
@@ -659,5 +937,12 @@ module.exports = {
   getTemplates,
   getAllTemplates,
   getTemplateByName,
-  findTemplateInDB
+  findTemplateInDB,
+  
+  // New chat functions
+  sendChatMessage,
+  sendQuickReply,
+  sendInteractive,
+  sendLocationMessage,
+  sendContactMessage
 };
