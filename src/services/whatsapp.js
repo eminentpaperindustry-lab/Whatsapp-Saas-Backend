@@ -1,6 +1,7 @@
 const axios = require('axios');
 const crypto = require("crypto");
 const MessageLog = require("../models/MessageLog");
+const Template = require("../models/Template"); // Add Template model
 
 // Environment variables should be set here, but for this example, they are placeholders
 const GRAPH_VERSION = process.env.META_WA_GRAPH_VERSION || 'v17.0';
@@ -21,9 +22,9 @@ function cleanText(text) {
   return text.replace(/[\n\t]+/g, ' ').replace(/ {5,}/g, '    ');
 }
 
-// Function to send raw payload to WhatsApp (No change needed here)
+// Function to send raw payload to WhatsApp
 async function sendRaw(payload) {
-  console.log('WhatsApp send payload:', JSON.stringify(payload, null, 2));
+  console.log('📤 WhatsApp send payload:', JSON.stringify(payload, null, 2));
   try {
     const res = await axios.post(MESSAGE_SEND_URL, payload, {
       headers: {
@@ -31,16 +32,16 @@ async function sendRaw(payload) {
         'Content-Type': 'application/json',
       },
     });
-    console.log('WhatsApp send response:', res.data);
+    console.log('✅ WhatsApp send response:', res.data);
     return res.data;
   } catch (err) {
-    console.error('WhatsApp send error:', err.response?.data || err.message);
+    console.error('❌ WhatsApp send error:', err.response?.data || err.message);
     throw err;
   }
 }
 
-// Fetch template details from WhatsApp API (No major change needed here)
-async function fetchTemplateDetail(templateName, language = 'en') {
+// Fetch template details from WhatsApp API
+async function fetchTemplateDetail(templateName, language = 'en_US') {
   const url = `${TEMPLATE_LIST_URL}?name=${templateName}&fields=name,components,language,status`;
   const resp = await axios.get(url, {
     headers: {
@@ -61,28 +62,30 @@ async function fetchTemplateDetail(templateName, language = 'en') {
   return tpl;
 }
 
-// Function to map dynamic template components (UPDATED LOGIC)
-// This function maps dynamic content (variables or media links) into the 'parameters' array.
+// Function to map dynamic template components (UPDATED for new Template model)
 function mapTemplateComponents(components, dynamicParams) {
   const mappedComponents = [];
-  let dynamicParamIndex = 0; // Index to track which dynamicParam is being used
+  let dynamicParamIndex = 0;
 
   components.forEach((comp) => {
     const type = comp.type.toLowerCase();
     let parameters = [];
 
-    // 1. Handle HEADER component (for dynamic media or text variables)
+    // 1. Handle HEADER component
     if (type === 'header') {
-      const format = (comp.format || 'text').toLowerCase(); // e.g., TEXT, IMAGE, VIDEO, DOCUMENT
+      const format = (comp.format || 'text').toLowerCase();
 
-      if (format === 'text' && comp.localizable_params && comp.localizable_params.length > 0) {
-        // Dynamic text variable in the header (e.g., {{1}})
-        if (dynamicParams[dynamicParamIndex]) {
-          parameters.push({ type: 'text', text: cleanText(dynamicParams[dynamicParamIndex]) });
-          dynamicParamIndex++;
+      if (format === 'text' && comp.text) {
+        // Check for variables in header text
+        const variableMatches = comp.text.match(/{{(\d+)}}/g) || [];
+        for (const match of variableMatches) {
+          if (dynamicParams[dynamicParamIndex]) {
+            parameters.push({ type: 'text', text: cleanText(dynamicParams[dynamicParamIndex]) });
+            dynamicParamIndex++;
+          }
         }
       } else if (['image', 'video', 'document'].includes(format)) {
-        // Dynamic media in the header (e.g., an image link)
+        // Dynamic media in the header
         if (dynamicParams[dynamicParamIndex]) {
           parameters.push({ type: format, [format]: { link: dynamicParams[dynamicParamIndex] } });
           dynamicParamIndex++;
@@ -90,26 +93,25 @@ function mapTemplateComponents(components, dynamicParams) {
       }
     }
 
-    // 2. Handle BODY component (for dynamic text variables)
-    else if (type === 'body' && comp.localizable_params) {
-      const bodyParamsCount = comp.localizable_params.length;
-          
-      // Map only the necessary dynamicParams to the body variables
-      for (let i = 0; i < bodyParamsCount; i++) {
+    // 2. Handle BODY component
+    else if (type === 'body' && comp.text) {
+      const bodyText = comp.text;
+      const variableMatches = bodyText.match(/{{(\d+)}}/g) || [];
+      
+      for (let i = 0; i < variableMatches.length; i++) {
         if (dynamicParams[dynamicParamIndex]) {
           parameters.push({ type: 'text', text: cleanText(dynamicParams[dynamicParamIndex]) });
           dynamicParamIndex++;
         } else {
-            // Handle case where dynamicParams are missing for a body variable
-            console.warn(`Missing dynamic parameter for body variable index ${i}`);
+          console.warn(`Missing dynamic parameter for body variable index ${i}`);
         }
       }
     }
 
-    // 3. Handle BUTTON component (for dynamic URLs)
-    else if (type === 'button' && comp.buttons) {
+    // 3. Handle BUTTONS component
+    else if (type === 'buttons' && comp.buttons) {
       comp.buttons.forEach((btn) => {
-        // Check if the button URL is dynamic (ends with {{1}} etc.)
+        // Handle URL buttons with dynamic parameters
         if (btn.type.toLowerCase() === 'url' && btn.url && btn.url.includes('{{')) {
           if (dynamicParams[dynamicParamIndex]) {
             parameters.push({ type: 'text', text: cleanText(dynamicParams[dynamicParamIndex]) });
@@ -120,96 +122,208 @@ function mapTemplateComponents(components, dynamicParams) {
     }
 
     if (parameters.length > 0) {
-      mappedComponents.push({ type, parameters });
+      mappedComponents.push({ 
+        type: type.toUpperCase(), 
+        parameters 
+      });
     }
   });
 
-  // Filter out any component types that do not have parameters
   return mappedComponents.filter(comp => comp.parameters && comp.parameters.length > 0);
 }
 
-// Send WhatsApp Template (UPDATED LOGIC)
+// Helper function to find template in database
+async function findTemplateInDB(templateName, tenantId = null) {
+  try {
+    const query = {
+      status: 'APPROVED',
+      $or: []
+    };
+    
+    // Add tenantId if provided
+    if (tenantId) {
+      query.tenantId = tenantId;
+    }
+    
+    // Try multiple search patterns
+    const searchPatterns = [];
+    
+    // 1. Exact name match (lowercase)
+    const lowercaseName = templateName.toLowerCase().replace(/\s+/g, '_');
+    searchPatterns.push({ name: lowercaseName });
+    
+    // 2. Case-insensitive name match
+    searchPatterns.push({ name: { $regex: new RegExp(`^${templateName}$`, 'i') } });
+    
+    // 3. Display name match
+    searchPatterns.push({ displayName: { $regex: new RegExp(templateName, 'i') } });
+    
+    // 4. Remove special characters and search
+    const cleanName = templateName.replace(/[^a-zA-Z0-9]/g, ' ').trim().toLowerCase().replace(/\s+/g, '_');
+    if (cleanName !== lowercaseName) {
+      searchPatterns.push({ name: cleanName });
+    }
+    
+    query.$or = searchPatterns;
+    
+    const template = await Template.findOne(query);
+    
+    if (template) {
+      console.log('✅ Template found in DB:', {
+        searched: templateName,
+        found: template.name,
+        displayName: template.displayName
+      });
+      return template;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ Error finding template in DB:', error);
+    return null;
+  }
+}
+
+// Send WhatsApp Template (UPDATED for new Template model)
 async function sendTemplate({
   to,
   templateName,
-  language = 'en', // Changed default to 'en' for simplicity, but 'en_US' is also common
-  dynamicParams = [], // Array of strings for variables: ['Value for {{1}}', 'Value for {{2}}', ...]
+  language = 'en_US',
+  dynamicParams = [], // Array of strings for variables
+  components = [],     // Optional: Pre-built components
+  tenantId = null     // Optional: Tenant ID for DB lookup
 }) {
   if (!to || !templateName) {
     throw new Error('to and templateName required for template message');
   }
 
-  // 1. Fetch template details to check for variables
-  const tplDetail = await fetchTemplateDetail(templateName, language);
-  console.log('Fetched template detail:', JSON.stringify(tplDetail, null, 2));
+  try {
+    console.log('📋 Template request details:', {
+      templateName,
+      language,
+      tenantId,
+      dynamicParamsCount: dynamicParams.length
+    });
 
-  const components = tplDetail.components || [];
+    // 1. First try to find template in local database
+    let actualTemplateName = templateName;
+    const localTemplate = await findTemplateInDB(templateName, tenantId);
+    
+    if (localTemplate) {
+      actualTemplateName = localTemplate.name;
+      console.log('✅ Using template from local DB:', actualTemplateName);
+    } else {
+      console.log('⚠️ Template not found locally, trying with provided name');
+      
+      // Try to convert to lowercase format
+      const formattedName = templateName.toLowerCase().replace(/\s+/g, '_');
+      if (formattedName !== templateName) {
+        console.log('🔄 Trying formatted name:', formattedName);
+        const formattedTemplate = await findTemplateInDB(formattedName, tenantId);
+        if (formattedTemplate) {
+          actualTemplateName = formattedTemplate.name;
+          console.log('✅ Found with formatted name:', actualTemplateName);
+        }
+      }
+    }
 
-  // 2. Check if the template has any dynamic variables at all
-  const hasVariables = components.some(comp => 
-        (comp.localizable_params && comp.localizable_params.length > 0) || 
-        (comp.type === 'BUTTON' && comp.buttons && comp.buttons.some(btn => btn.url && btn.url.includes('{{')))
-    );
+    // 2. Fetch template details from Meta
+    const tplDetail = await fetchTemplateDetail(actualTemplateName, language);
+    console.log('✅ Fetched template detail from Meta:', tplDetail.name);
 
-  let validComponents = [];
+    let validComponents = [];
 
-  // 3. ONLY map components if variables are present (Fixed-text templates skip this)
-  if (hasVariables && dynamicParams.length > 0) {
-    validComponents = mapTemplateComponents(components, dynamicParams);
-  }
-  
-  // IMPORTANT: If a template has variables but dynamicParams is missing, this will result in an error
-  // The check above will prevent a malformed request for a fixed template.
+    // 3. If dynamicParams provided, map them to components
+    if (dynamicParams && dynamicParams.length > 0) {
+      validComponents = mapTemplateComponents(tplDetail.components || [], dynamicParams);
+    } 
+    // 4. Else if components provided directly, use them
+    else if (components && components.length > 0) {
+      validComponents = components;
+    }
 
-  // 4. Create the final payload
-  const payload = {
-    messaging_product: 'whatsapp',
-    to,
-    type: 'template',
-    template: {
-      name: templateName,
-      language: { code: language },
-    },
-  };
-  
-  // 5. Conditionally add the 'components' array ONLY if it's not empty
-  if (validComponents.length > 0) {
+    // 5. Create the final payload
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'template',
+      template: {
+        name: actualTemplateName,
+        language: { 
+          code: language,
+          policy: 'deterministic'
+        },
+      },
+    };
+    
+    // 6. Conditionally add the 'components' array ONLY if it's not empty
+    if (validComponents.length > 0) {
       payload.template.components = validComponents;
+    }
+
+    console.log('📤 Final template payload:', JSON.stringify(payload, null, 2));
+    return sendRaw(payload);
+    
+  } catch (error) {
+    console.error('❌ Error in sendTemplate:', error.message);
+    throw error;
   }
-
-  console.log('Final payload to send:', JSON.stringify(payload, null, 2));
-
-  return sendRaw(payload);
 }
 
-
-// --- Rest of your functions (No major changes needed as they are correct) ---
+// =======================
+// SIMPLE MESSAGE FUNCTIONS
+// =======================
 
 // Send Text Message
 async function sendText({ to, body }) {
   if (!to || !body) throw new Error('to and body required');
-  const payload = { messaging_product: 'whatsapp', to, type: 'text', text: { body } };
+  const payload = { 
+    messaging_product: 'whatsapp', 
+    recipient_type: 'individual',
+    to, 
+    type: 'text', 
+    text: { body } 
+  };
   return sendRaw(payload);
 }
 
 // Send Image
 async function sendImage({ to, imageUrl, caption = '' }) {
   if (!to || !imageUrl) throw new Error('to and imageUrl required');
-  const payload = { messaging_product: 'whatsapp', to, type: 'image', image: { link: imageUrl, caption } };
+  const payload = { 
+    messaging_product: 'whatsapp', 
+    recipient_type: 'individual',
+    to, 
+    type: 'image', 
+    image: { link: imageUrl, caption } 
+  };
   return sendRaw(payload);
 }
 
 // Send Video
 async function sendVideo({ to, videoUrl, caption = '' }) {
   if (!to || !videoUrl) throw new Error('to and videoUrl required');
-  const payload = { messaging_product: 'whatsapp', to, type: 'video', video: { link: videoUrl, caption } };
+  const payload = { 
+    messaging_product: 'whatsapp', 
+    recipient_type: 'individual',
+    to, 
+    type: 'video', 
+    video: { link: videoUrl, caption } 
+  };
   return sendRaw(payload);
 }
 
 // Send File
 async function sendFile({ to, fileUrl, caption = '' }) {
   if (!to || !fileUrl) throw new Error('to and fileUrl required');
-  const payload = { messaging_product: 'whatsapp', to, type: 'document', document: { link: fileUrl, caption } };
+  const payload = { 
+    messaging_product: 'whatsapp', 
+    recipient_type: 'individual',
+    to, 
+    type: 'document', 
+    document: { link: fileUrl, caption } 
+  };
   return sendRaw(payload);
 }
 
@@ -218,6 +332,7 @@ async function sendLocation({ to, latitude, longitude, name = '', address = '' }
   if (!to || !latitude || !longitude) throw new Error('to, latitude, and longitude are required');
   const payload = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to,
     type: 'location',
     location: {
@@ -235,6 +350,7 @@ async function sendContact({ to, contacts }) {
   if (!to || !Array.isArray(contacts)) throw new Error('to and contacts array are required');
   const payload = {
     messaging_product: 'whatsapp',
+    recipient_type: 'individual',
     to,
     type: 'contacts',
     contacts: contacts.map((contact) => ({
@@ -246,16 +362,16 @@ async function sendContact({ to, contacts }) {
 }
 
 // =======================
-// CAMPAIGN SPECIFIC FUNCTIONS
+// CAMPAIGN FUNCTIONS
 // =======================
 
 /**
  * Process campaign step for a contact
  */
-async function processCampaignStep(step, contact, campaign) {
+async function processCampaignStep(step, contact, campaign, tenantId = null) {
   try {
     const to = contact.phone.replace(/\+/g, '');
-    console.log(`Processing campaign step ${step.sequence} for ${to}`);
+    console.log(`🎯 Processing campaign step ${step.sequence} for ${to}`);
 
     let response = null;
 
@@ -265,15 +381,25 @@ async function processCampaignStep(step, contact, campaign) {
         break;
         
       case 'media':
-        // Check if media URL is image, video or document
         const mediaUrl = step.mediaUrl;
         if (mediaUrl.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-          response = await sendImage({ to, imageUrl: mediaUrl, caption: step.body || '' });
-        } else if (mediaUrl.match(/\.(pdf|doc|docx|txt|xlsx)$/i)) {
-          response = await sendFile({ to, fileUrl: mediaUrl, caption: step.body || '' });
+          response = await sendImage({ 
+            to, 
+            imageUrl: mediaUrl, 
+            caption: step.caption || '' 
+          });
+        } else if (mediaUrl.match(/\.(mp4|avi|mov|wmv)$/i)) {
+          response = await sendVideo({ 
+            to, 
+            videoUrl: mediaUrl, 
+            caption: step.caption || '' 
+          });
         } else {
-          // Default to image
-          response = await sendImage({ to, imageUrl: mediaUrl, caption: step.body || '' });
+          response = await sendFile({ 
+            to, 
+            fileUrl: mediaUrl, 
+            caption: step.caption || '' 
+          });
         }
         break;
         
@@ -281,10 +407,19 @@ async function processCampaignStep(step, contact, campaign) {
         if (!step.templateName) {
           throw new Error('Template name is required for template messages');
         }
+        
+        // Extract dynamic parameters from step if available
+        let dynamicParams = [];
+        if (step.dynamicParams && Array.isArray(step.dynamicParams)) {
+          dynamicParams = step.dynamicParams;
+        }
+        
         response = await sendTemplate({
           to,
           templateName: step.templateName,
-          language: step.language || 'en_US'
+          language: step.language || 'en_US',
+          dynamicParams: dynamicParams,
+          tenantId: tenantId || campaign.tenantId
         });
         break;
         
@@ -299,7 +434,7 @@ async function processCampaignStep(step, contact, campaign) {
       stepId: step._id
     };
   } catch (error) {
-    console.error(`Error processing step for ${contact.phone}:`, error);
+    console.error(`❌ Error processing step for ${contact.phone}:`, error);
     return {
       success: false,
       error: error.message,
@@ -310,116 +445,14 @@ async function processCampaignStep(step, contact, campaign) {
 }
 
 /**
- * Send batch messages (for campaign triggers)
+ * Send batch messages
  */
-// services/whatsapp.js में sendTemplate function update करें
-
-// async function sendTemplate({
-//   to,
-//   templateName,
-//   language = 'en_US',
-//   components = []  // Dynamic variables
-// }) {
-//   if (!to || !templateName) {
-//     throw new Error('to and templateName required for template message');
-//   }
-
-//   try {
-//     // First get template details to check structure
-//     const templateResult = await getTemplateByName(templateName, language);
-    
-//     if (!templateResult.success) {
-//       throw new Error(`Template "${templateName}" not found: ${templateResult.error}`);
-//     }
-    
-//     const template = templateResult.template;
-    
-//     // Build components array for dynamic variables
-//     const templateComponents = [];
-    
-//     if (components && components.length > 0) {
-//       // Group components by type
-//       const headerComponents = components.filter(c => c.type === 'HEADER');
-//       const bodyComponents = components.filter(c => c.type === 'BODY');
-//       const buttonComponents = components.filter(c => c.type === 'BUTTONS');
-      
-//       if (headerComponents.length > 0) {
-//         templateComponents.push({
-//           type: 'HEADER',
-//           parameters: headerComponents.map(comp => ({
-//             type: comp.format === 'IMAGE' ? 'image' : 
-//                   comp.format === 'VIDEO' ? 'video' : 
-//                   comp.format === 'DOCUMENT' ? 'document' : 'text',
-//             ...(comp.format === 'TEXT' ? { text: comp.text } : 
-//                 comp.format === 'IMAGE' ? { image: { link: comp.text } } :
-//                 comp.format === 'VIDEO' ? { video: { link: comp.text } } :
-//                 comp.format === 'DOCUMENT' ? { document: { link: comp.text } } : {})
-//           }))
-//         });
-//       }
-      
-//       if (bodyComponents.length > 0) {
-//         templateComponents.push({
-//           type: 'BODY',
-//           parameters: bodyComponents.map(comp => ({
-//             type: 'text',
-//             text: comp.text
-//           }))
-//         });
-//       }
-      
-//       if (buttonComponents.length > 0) {
-//         buttonComponents.forEach(buttonComp => {
-//           templateComponents.push({
-//             type: 'BUTTON',
-//             sub_type: 'URL',
-//             index: buttonComp.index || '0',
-//             parameters: [{
-//               type: 'text',
-//               text: buttonComp.text
-//             }]
-//           });
-//         });
-//       }
-//     }
-    
-//     // Prepare payload
-//     const payload = {
-//       messaging_product: 'whatsapp',
-//       recipient_type: 'individual',
-//       to: to,
-//       type: 'template',
-//       template: {
-//         name: templateName,
-//         language: {
-//           code: language
-//         }
-//       }
-//     };
-    
-//     // Add components if we have dynamic variables
-//     if (templateComponents.length > 0) {
-//       payload.template.components = templateComponents;
-//     }
-    
-//     console.log('Sending template payload:', JSON.stringify(payload, null, 2));
-    
-//     // Send the message
-//     const response = await sendRaw(payload);
-//     return response;
-    
-//   } catch (error) {
-//     console.error('Error sending template:', error);
-//     throw error;
-//   }
-// }
-
 async function sendBatchMessages(messages) {
   try {
     const results = await Promise.all(
       messages.map(async (msg) => {
         try {
-          const result = await processCampaignStep(msg.step, msg.contact, msg.campaign);
+          const result = await processCampaignStep(msg.step, msg.contact, msg.campaign, msg.tenantId);
           return result;
         } catch (error) {
           return {
@@ -434,128 +467,21 @@ async function sendBatchMessages(messages) {
 
     return results;
   } catch (error) {
-    console.error('Error sending batch messages:', error);
+    console.error('❌ Error sending batch messages:', error);
     throw error;
   }
 }
 
-// ... existing code ...
-
-async function sendTemplate({
-  to,
-  templateName,
-  language = 'en_US',
-  components = []
-}) {
-  if (!to || !templateName) {
-    throw new Error('to and templateName required for template message');
-  }
-
-  try {
-    const GRAPH_VERSION = process.env.META_WA_GRAPH_VERSION || 'v17.0';
-    const PHONE_ID = process.env.META_WA_PHONE_ID;
-    const TOKEN = process.env.META_WA_TOKEN;
-    
-    if (!PHONE_ID || !TOKEN) {
-      throw new Error('WhatsApp API credentials not configured');
-    }
-    
-    const MESSAGE_SEND_URL = `https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_ID}/messages`;
-    
-    // Prepare payload
-    const payload = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: to,
-      type: 'template',
-      template: {
-        name: templateName,
-        language: {
-          code: language,
-          policy: 'deterministic'
-        }
-      }
-    };
-    
-    // Add components if we have dynamic variables
-    if (components && components.length > 0) {
-      payload.template.components = components;
-    }
-    
-    console.log('Sending template payload:', JSON.stringify(payload, null, 2));
-    
-    // Send the message
-    const response = await axios.post(MESSAGE_SEND_URL, payload, {
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-    });
-    
-    console.log('Template response:', response.data);
-    return response.data;
-    
-  } catch (error) {
-    console.error('Error sending template:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// ... rest of the code ...
-
-// WhatsApp Health Check
-async function checkWhatsAppHealth() {
-  try {
-    const response = await axios.get(
-      `https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_ID}/phone_numbers`,
-      {
-        headers: {
-          Authorization: `Bearer ${TOKEN}`,
-        },
-      }
-    );
-    return {
-      healthy: true,
-      data: response.data,
-    };
-  } catch (error) {
-    return {
-      healthy: false,
-      error: error.response?.data || error.message,
-    };
-  }
-}
-
-// Get templates from Meta
-async function getTemplates() {
-  try {
-    const response = await axios.get(TEMPLATE_LIST_URL, {
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-      },
-    });
-    return response.data;
-  } catch (error) {
-    console.error('❌ WhatsApp API Error (getTemplates):', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// services/whatsapp.js में ये function add करें
+// =======================
+// TEMPLATE MANAGEMENT
+// =======================
 
 /**
  * Get all approved templates from Meta
  */
-// services/whatsapp.js में ये function है जो templates fetch कर रहा है
-async function getAllTemplates() {
+async function getAllTemplates(tenantId = null) {
   try {
-    const GRAPH_VERSION = process.env.META_WA_GRAPH_VERSION || 'v17.0';
-    const WABA_ID = process.env.META_WA_BUSINESS_ID;
-    const TOKEN = process.env.META_WA_TOKEN;
-    
-    console.log('📞 Fetching templates with:');
-    console.log('  WABA_ID:', WABA_ID);
-    console.log('  TOKEN:', TOKEN ? 'Present' : 'Missing');
+    console.log('📞 Fetching templates from Meta...');
     
     if (!WABA_ID || !TOKEN) {
       throw new Error('WhatsApp API credentials not configured');
@@ -584,18 +510,21 @@ async function getAllTemplates() {
     
     console.log('✅ Approved templates:', approvedTemplates.length);
     
-    if (approvedTemplates.length > 0) {
-      console.log('📝 Sample template:', {
-        name: approvedTemplates[0].name,
-        language: approvedTemplates[0].language,
-        status: approvedTemplates[0].status,
-        category: approvedTemplates[0].category
-      });
+    // Also get templates from local database
+    let localTemplates = [];
+    if (tenantId) {
+      localTemplates = await Template.find({
+        tenantId: tenantId,
+        status: 'APPROVED'
+      }).select('name displayName language category');
+      
+      console.log('📊 Local templates:', localTemplates.length);
     }
     
     return {
       success: true,
       templates: approvedTemplates,
+      localTemplates: localTemplates,
       total: approvedTemplates.length
     };
     
@@ -606,14 +535,13 @@ async function getAllTemplates() {
     if (error.response) {
       console.error('  Status:', error.response.status);
       console.error('  Data:', JSON.stringify(error.response.data, null, 2));
-    } else if (error.request) {
-      console.error('  No response received');
     }
     
     return {
       success: false,
       error: error.response?.data?.error?.message || error.message,
       templates: [],
+      localTemplates: [],
       total: 0
     };
   }
@@ -622,11 +550,13 @@ async function getAllTemplates() {
 /**
  * Get template by name
  */
-async function getTemplateByName(templateName, language = 'en_US') {
+async function getTemplateByName(templateName, language = 'en_US', tenantId = null) {
   try {
-    const GRAPH_VERSION = process.env.META_WA_GRAPH_VERSION || 'v17.0';
-    const WABA_ID = process.env.META_WA_BUSINESS_ID;
-    const TOKEN = process.env.META_WA_TOKEN;
+    // First check local database
+    let localTemplate = null;
+    if (tenantId) {
+      localTemplate = await findTemplateInDB(templateName, tenantId);
+    }
     
     const url = `https://graph.facebook.com/${GRAPH_VERSION}/${WABA_ID}/message_templates`;
     
@@ -635,7 +565,7 @@ async function getTemplateByName(templateName, language = 'en_US') {
         'Authorization': `Bearer ${TOKEN}`
       },
       params: {
-        name: templateName,
+        name: localTemplate ? localTemplate.name : templateName,
         fields: 'name,language,status,category,components'
       }
     });
@@ -656,15 +586,57 @@ async function getTemplateByName(templateName, language = 'en_US') {
     
     return {
       success: true,
-      template: template
+      template: template,
+      localTemplate: localTemplate
     };
     
   } catch (error) {
-    console.error(`Error fetching template ${templateName}:`, error.response?.data || error.message);
+    console.error(`❌ Error fetching template ${templateName}:`, error.response?.data || error.message);
     return {
       success: false,
       error: error.response?.data?.error?.message || error.message,
-      template: null
+      template: null,
+      localTemplate: null
+    };
+  }
+}
+
+/**
+ * Get templates from Meta (Simple version)
+ */
+async function getTemplates() {
+  try {
+    const response = await axios.get(TEMPLATE_LIST_URL, {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error('❌ WhatsApp API Error (getTemplates):', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// WhatsApp Health Check
+async function checkWhatsAppHealth() {
+  try {
+    const response = await axios.get(
+      `https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_ID}/phone_numbers`,
+      {
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+        },
+      }
+    );
+    return {
+      healthy: true,
+      data: response.data,
+    };
+  } catch (error) {
+    return {
+      healthy: false,
+      error: error.response?.data || error.message,
     };
   }
 }
@@ -684,5 +656,8 @@ module.exports = {
   processCampaignStep,
   sendBatchMessages,
   checkWhatsAppHealth,
-  getTemplates
+  getTemplates,
+  getAllTemplates,
+  getTemplateByName,
+  findTemplateInDB
 };

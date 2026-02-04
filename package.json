@@ -4,23 +4,44 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "prod": "NODE_ENV=production node src/server.js",
+    "test": "node src/test-server.js",
+    "migrate": "node src/ultimate-migrate.js",
+    "check-env": "node src/final-test.js",
+    "server": "node src/server.js",
+    "pm2-start": "pm2 start src/server.js --name whatsapp-campaigns",
+    "pm2-stop": "pm2 stop whatsapp-campaigns",
+    "pm2-restart": "pm2 restart whatsapp-campaigns",
+    "pm2-logs": "pm2 logs whatsapp-campaigns",
+    "pm2-status": "pm2 status",
+    "pm2-save": "pm2 save",
+    "pm2-delete": "pm2 delete whatsapp-campaigns",
+    "pm2-monitor": "pm2 monit",
+    "render-deploy": "render deploy",
+    "debug:scheduler": "node src/debug-scheduler.js",
+    "fix:campaigns": "node src/fix-campaigns.js",
+    "clean:logs": "node src/clean-logs.js",
+    "health:check": "node src/health-check.js"
   },
-  "test": "node src/test-server.js",
-  "migrate": "node src/ultimate-migrate.js",
-  "check-env": "node src/final-test.js",
-  "server": "node src/server.js",
   "dependencies": {
     "axios": "^1.12.2",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.9.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "csv-parser": "^3.0.0",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "express-rate-limit": "^7.5.1",
+    "express-validator": "^7.3.1",
+    "form-data": "^4.0.5",
     "helmet": "^7.0.0",
+    "http-status-codes": "^2.3.0",
+    "joi": "^17.13.3",
     "jsonwebtoken": "^9.0.0",
+    "lodash": "^4.17.23",
     "mime-types": "^2.1.35",
     "moment-timezone": "^0.6.0",
     "mongodb": "^6.19.0",
@@ -28,14 +49,43 @@
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "multer-storage-cloudinary": "^2.2.1",
+    "node-cache": "^5.1.2",
     "node-cron": "^4.2.1",
     "node-fetch": "^3.3.2",
     "nodemailer": "^7.0.12",
+    "p-queue": "^7.4.1",
+    "pm2": "^5.3.0",
+    "queue": "^6.0.2",
     "socket.io": "^4.8.1",
     "twilio": "^4.13.0",
+    "uuid": "^13.0.0",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^4.7.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
-  }
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "campaign",
+    "scheduler",
+    "autonomous",
+    "saas",
+    "24x7"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/whatsapp-saas-backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/whatsapp-saas-backend/issues"
+  },
+  "homepage": "https://github.com/yourusername/whatsapp-saas-backend#readme"
 }
