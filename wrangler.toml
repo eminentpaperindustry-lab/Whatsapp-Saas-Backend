@@ -1,3 +1,3 @@
-name = "mera-worker"                          
+name = "wabackend"
 compatibility_date = "2026-02-07"            
 main = "src/index.js"                         
