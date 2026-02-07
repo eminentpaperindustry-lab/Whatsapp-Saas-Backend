@@ -1,8 +1,6 @@
 require("dotenv").config();
-
 // Force Indian timezone for consistent scheduling
 process.env.TZ = 'Asia/Kolkata';
-
 console.log('\n' + '='.repeat(60));
 console.log('🚀 WHATSAPP CAMPAIGN SERVER - AUTONOMOUS MODE');
 console.log('='.repeat(60));
@@ -10,7 +8,6 @@ console.log(`🕐 Server Timezone: ${Intl.DateTimeFormat().resolvedOptions().tim
 console.log(`📅 Server Time: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
 console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
 console.log('='.repeat(60));
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -22,12 +19,10 @@ const rateLimit = require("express-rate-limit");
 const mongoose = require("mongoose");
 const path = require("path");
 const fs = require("fs");
-
 // Import autonomous services
 const campaignScheduler = require('./services/campaignScheduler');
 const campaignProcessor = require('./services/campaignProcessor');
 const logger = require('./utils/logger');
-
 const app = express();
 const server = http.createServer(app);
 
