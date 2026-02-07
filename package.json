@@ -52,6 +52,6 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.11",
-    "wrangler": "^3.114.17"
+    "wrangler": "^4.63.0"
   }
 }
